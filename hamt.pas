@@ -38,6 +38,7 @@ function  HAMT_destroy32(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
 function  HAMT_search32(hamt:THAMT;key:DWORD):PPointer;              //mutable link to data
 function  HAMT_insert32(hamt:THAMT;key:DWORD;data:Pointer):PPointer; //mutable link to data
 function  HAMT_delete32(hamt:THAMT;key:DWORD):Pointer;               //data
+function  HAMT_traverse32(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
 
 function  HAMT_create64:THAMT;
 function  HAMT_clear64(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
@@ -45,8 +46,7 @@ function  HAMT_destroy64(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
 function  HAMT_search64(hamt:THAMT;key:QWORD):PPointer;              //mutable link to data
 function  HAMT_insert64(hamt:THAMT;key:QWORD;data:Pointer):PPointer; //mutable link to data
 function  HAMT_delete64(hamt:THAMT;key:QWORD):Pointer;               //data
-
-implementation
+function  HAMT_traverse64(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
 
 type
  // [7] [5]*5 =32
@@ -93,6 +93,11 @@ type
   BitMapKey:QWORD;
   BaseValue:Pointer;
  end;
+
+ TSTUB_HAMT32=array[0..HAMT32.root_size-1] of THAMTNode32;
+ TSTUB_HAMT64=array[0..HAMT64.root_size-1] of THAMTNode64;
+
+implementation
 
 function IsSubTrie32(n:PHAMTNode32):Boolean; inline;
 begin
@@ -360,6 +365,134 @@ begin
  Result:=True;
 end;
 
+procedure HAMT_traverse_trie32(node:PHAMTNode32;cb:Tfree_data_cb;userdata:Pointer); inline;
+type
+ PStackNode=^TStackNode;
+ TStackNode=packed record
+  cnode,enode:PHAMTNode32;
+ end;
+var
+ curr:PStackNode;
+ data:array[0..HAMT32.stack_max] of TStackNode;
+ Size:QWORD;
+begin
+ if IsSubTrie32(node) then
+ begin
+  curr:=@data;
+  Size:=GetBitMapSize32(node^.BitMapKey);
+  With curr^ do
+  begin
+   cnode:=GetSubTrie32(node);
+   enode:=@cnode[Size];
+  end;
+  repeat
+   if (curr^.cnode>=curr^.enode) then
+   begin
+    if (curr=@data) then Break;
+    Dec(curr);
+    Inc(curr^.cnode);
+    Continue;
+   end;
+   if IsSubTrie32(curr^.cnode) then
+   begin
+    node:=curr^.cnode;
+    Inc(curr);
+    Size:=GetBitMapSize32(node^.BitMapKey);
+    With curr^ do
+    begin
+     cnode:=GetSubTrie32(node);
+     enode:=@cnode[Size];
+    end;
+   end else
+   begin
+    if (cb<>nil) then
+     cb(GetValue32(curr^.cnode),userdata);
+    Inc(curr^.cnode);
+   end;
+  until false;
+ end else
+ begin
+  if (cb<>nil) then
+   cb(GetValue32(node),userdata);
+ end;
+end;
+
+procedure HAMT_traverse_trie64(node:PHAMTNode64;cb:Tfree_data_cb;userdata:Pointer); inline;
+type
+ PStackNode=^TStackNode;
+ TStackNode=packed record
+  cnode,enode:PHAMTNode64;
+ end;
+var
+ curr:PStackNode;
+ data:array[0..HAMT64.stack_max] of TStackNode;
+ Size:QWORD;
+begin
+ if IsSubTrie64(node) then
+ begin
+  curr:=@data;
+  Size:=GetBitMapSize64(node^.BitMapKey);
+  With curr^ do
+  begin
+   cnode:=GetSubTrie64(node);
+   enode:=@cnode[Size];
+  end;
+  repeat
+   if (curr^.cnode>=curr^.enode) then
+   begin
+    if (curr=@data) then Break;
+    Dec(curr);
+    Inc(curr^.cnode);
+    Continue;
+   end;
+   if IsSubTrie64(curr^.cnode) then
+   begin
+    node:=curr^.cnode;
+    Inc(curr);
+    Size:=GetBitMapSize64(node^.BitMapKey);
+    With curr^ do
+    begin
+     cnode:=GetSubTrie64(node);
+     enode:=@cnode[Size];
+    end;
+   end else
+   begin
+    if (cb<>nil) then
+     cb(GetValue64(curr^.cnode),userdata);
+    Inc(curr^.cnode);
+   end;
+  until false;
+ end else
+ begin
+  if (cb<>nil) then
+   cb(GetValue64(node),userdata);
+ end;
+end;
+
+function HAMT_traverse32(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
+var
+ i:Integer;
+begin
+ if (hamt=nil) then Exit(False);
+ For i:=0 to HAMT32.root_mask do
+ begin
+  HAMT_traverse_trie32(@PHAMTNode32(hamt)[i],cb,userdata);
+ end;
+ Result:=True;
+end;
+
+function HAMT_traverse64(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
+var
+ i:Integer;
+begin
+ if (hamt=nil) then Exit(False);
+ For i:=0 to HAMT64.root_mask do
+ begin
+  HAMT_traverse_trie64(@PHAMTNode64(hamt)[i],cb,userdata);
+ end;
+ Result:=True;
+end;
+
 function HAMT_destroy32(hamt:THAMT;cb:Tfree_data_cb;userdata:Pointer):Boolean;
 begin
  Result:=HAMT_clear32(hamt,cb,userdata);
@@ -493,6 +626,7 @@ begin
      if (keypart=keypart2) then
      begin
       newnodes:=AllocMem(SizeOf(THAMTNode32));
+      Assert((PtrUint(newnodes) and 1)=0);
       newnodes[0].BitMapKey:=key2;
       newnodes[0].BaseValue:=node^.BaseValue;
       node^.BitMapKey:=SetBitInSet32(0,keypart);
@@ -501,6 +635,7 @@ begin
      end else
      begin
       newnodes:=AllocMem(2*SizeOf(THAMTNode32));
+      Assert((PtrUint(newnodes) and 1)=0);
 
       if (keypart2<keypart) then
       begin
@@ -549,6 +684,7 @@ begin
    end else
    begin
     newnodes:=AllocMem(Size*SizeOf(THAMTNode32));
+    Assert((PtrUint(newnodes) and 1)=0);
     Move(oldnodes[0]  ,newnodes[0]    ,         Map*SizeOf(THAMTNode32));
     Move(oldnodes[Map],newnodes[Map+1],(Size-Map-1)*SizeOf(THAMTNode32));
     FreeMem(oldnodes);
@@ -609,6 +745,7 @@ begin
      if (keypart=keypart2) then
      begin
       newnodes:=AllocMem(SizeOf(THAMTNode64));
+      Assert((PtrUint(newnodes) and 1)=0);
       newnodes[0].BitMapKey:=key2;
       newnodes[0].BaseValue:=node^.BaseValue;
       node^.BitMapKey:=SetBitInSet64(0,keypart);
@@ -617,6 +754,7 @@ begin
      end else
      begin
       newnodes:=AllocMem(2*SizeOf(THAMTNode64));
+      Assert((PtrUint(newnodes) and 1)=0);
 
       if (keypart2<keypart) then
       begin
@@ -665,6 +803,7 @@ begin
    end else
    begin
     newnodes:=AllocMem(Size*SizeOf(THAMTNode64));
+    Assert((PtrUint(newnodes) and 1)=0);
     Move(oldnodes[0]  ,newnodes[0]    ,         Map*SizeOf(THAMTNode64));
     Move(oldnodes[Map],newnodes[Map+1],(Size-Map-1)*SizeOf(THAMTNode64));
     FreeMem(oldnodes);
@@ -697,6 +836,7 @@ begin
  keypartbits:=HAMT32.root_bits;
 
  prev:=nil;
+ Map:=0;
 
  keypart:=key and HAMT32.root_mask;
  node:=@PHAMTNode32(hamt)[keypart];
@@ -733,6 +873,7 @@ begin
     if ((2*Size*SizeOf(THAMTNode32))<=MemSize(oldnodes)) then
     begin
      newnodes:=AllocMem(Size*SizeOf(THAMTNode32));
+     Assert((PtrUint(newnodes) and 1)=0);
      Move(oldnodes[0]    ,newnodes[0]  ,Map*SizeOf(THAMTNode32));
      Move(oldnodes[Map+1],newnodes[Map],(Size-Map)*SizeOf(THAMTNode32));
      FreeMem(oldnodes);
@@ -775,6 +916,7 @@ begin
  keypartbits:=HAMT64.root_bits;
 
  prev:=nil;
+ Map:=0;
 
  keypart:=key and HAMT64.root_mask;
  node:=@PHAMTNode64(hamt)[keypart];
@@ -811,6 +953,7 @@ begin
     if ((2*Size*SizeOf(THAMTNode64))<=MemSize(oldnodes)) then
     begin
      newnodes:=AllocMem(Size*SizeOf(THAMTNode64));
+     Assert((PtrUint(newnodes) and 1)=0);
      Move(oldnodes[0]    ,newnodes[0]  ,Map*SizeOf(THAMTNode64));
      Move(oldnodes[Map+1],newnodes[Map],(Size-Map)*SizeOf(THAMTNode64));
      FreeMem(oldnodes);
